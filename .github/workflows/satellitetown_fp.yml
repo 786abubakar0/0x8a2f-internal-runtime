@@ -1,0 +1,80 @@
+name: SatelliteTown fp
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  
+on:
+  schedule:
+    - cron: '10 5,8,11,14,17 * * *'
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: Random Stagger
+        run: sleep $(( ( RANDOM % 45 )  + 1 ))
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Scraper
+        env:
+          CUSTOMER_ID: ${{ secrets.CUSTOMER_ID }}
+          PROXIES_JSON: ${{ secrets.PROXIES_JSON }}
+        run: python fp.py --branch satellitetown
+
+      - name: Sync and Push Results
+        run: |
+          git config --global user.name "System-Bot"
+          git config --global user.email "actions@github.com"
+          
+          for i in {1..5}; do
+            echo "Attempt $i to sync and push..."
+            
+            # 1. HIDE the new CSV so the workspace looks 'clean' to Git
+            git stash
+            
+            # 2. Pull the latest data from other scrapers
+            git pull origin master --rebase
+            
+            # 3. BRING BACK the new CSV from the stash
+            git stash pop || echo "No changes to pop"
+            
+            # 4. NOW add the file
+            git add extracted_satellitetown.csv
+            
+            if ! git diff --staged --quiet; then
+              git commit -m "Update Satellitetown: $(date)" || echo "Already committed"
+              
+              if git push origin master; then
+                echo "✅ Success!"
+                exit 0
+              fi
+            else
+              echo "No new data detected."
+              exit 0
+            fi
+            
+            echo "⚠️ Collision detected. Retrying in $((i * 3)) seconds..."
+            sleep $((i * 3))
+          done
+          
+          echo "❌ Failed after 5 attempts."
+          exit 1
